@@ -3,32 +3,37 @@ LangGraph graph for the Weather-Advisory Support Bot.
 
 Graph flow:
   understand_question
-       |
-  fetch_weather  --(no location / weather error)--> failure_response --> END
-       |
+       │
+  fetch_weather  ──(no location / weather error)──► failure_response → END
+       │
   evaluate_sops  (deterministic Python — NO LLM)
-       |
+       │
   sop_found?
-  |-- NO  --> no_sop_response --> END
-  +-- YES --> compose_response --> END
+  ├── NO  → no_sop_response → END
+  └── YES → compose_response → END
 
-The LLM is used ONLY in:
-- understand_question: extract location/activity/vulnerable_group
-- compose_response: format the final natural-language answer
-- no_sop_response: format the "no policy found" message
-- failure_response: format the failure message
+LLM is used ONLY in:
+  - understand_question : extract structured intent from natural language
+  - compose_response    : format natural-language answer around deterministic results
+  - no_sop_response     : format "no policy found" message
+  - failure_response    : format "weather unavailable" message
 
-The LLM is NEVER used to decide which SOP applies.
+LLM is NEVER used to decide which SOP applies, evaluate thresholds, or invent weather values.
 """
 import os
 import json
+from pathlib import Path
 from typing import Optional, TypedDict
+from dataclasses import dataclass
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 
 load_dotenv()
+# Explicitly load from project root .env regardless of cwd (needed when running eval suite)
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
+
 
 # ---------------------------------------------------------------------------
 # Resolve API key — works locally (.env) AND on Streamlit Cloud (st.secrets)
@@ -50,6 +55,7 @@ def _resolve_groq_key() -> str:
         "Add it to .env (local) or Streamlit Cloud secrets (deployment)."
     )
 
+
 GROQ_API_KEY = _resolve_groq_key()
 
 from src.sop_engine import load_sops, evaluate_sops, select_primary_sop, SOP, SOPMatch
@@ -67,27 +73,54 @@ from src.prompts import (
 # ---------------------------------------------------------------------------
 llm = ChatGroq(model="qwen/qwen3.8-27b", temperature=0, api_key=GROQ_API_KEY)
 
-# Load SOPs once at startup
+# Load SOPs once at startup — avoids re-reading YAML on every request
 ALL_SOPS = load_sops()
 
 
 # ---------------------------------------------------------------------------
-# State
+# Structured intent — validated before weather fetch
+# ---------------------------------------------------------------------------
+@dataclass
+class UserIntent:
+    """Validated structured intent extracted from user message."""
+    location: Optional[str]       # city name, None if unknown
+    activity: Optional[str]       # what user wants to do
+    vulnerable_group: Optional[str]  # elderly/children/pets, or None
+    is_followup: bool             # True if this refers to a prior message
+    missing_location: bool        # True when location cannot be determined
+
+
+# ---------------------------------------------------------------------------
+# AgentState — explicitly typed for all fields carried across nodes
 # ---------------------------------------------------------------------------
 class AgentState(TypedDict):
-    messages: list                  # conversation history (HumanMessage, AIMessage)
+    # Conversation history (LangChain message objects)
+    messages: list
+
+    # Current turn input
     current_question: str
-    location: Optional[str]
-    activity: Optional[str]
-    vulnerable_group: Optional[str]
+
+    # Structured context — persisted across follow-up turns
+    location: Optional[str]           # resolved city name
+    latitude: Optional[float]         # from geocoding (stored for auditability)
+    longitude: Optional[float]        # from geocoding
+    activity: Optional[str]           # user's intended activity
+    category: Optional[str]           # SOP category hint
+    vulnerable_group: Optional[str]   # elderly / children / pets
+    time_reference: Optional[str]     # "today", "tomorrow", "this evening", etc.
     is_followup: bool
+
+    # Weather data from Open-Meteo (never invented)
     weather: Optional[dict]
     weather_error: Optional[str]
-    # Deterministic engine results
-    sop_matches: list               # list of dicts from SOPMatch objects
-    primary_sop: Optional[dict]     # the selected SOP dict
-    trigger_reasons: list           # reasons why the primary SOP was triggered
-    all_applicable_ids: list        # all matched SOP IDs
+
+    # Deterministic SOP engine results
+    sop_matches: list          # all matched SOPs as dicts, with evidence
+    primary_sop: Optional[dict]
+    trigger_reasons: list      # machine-readable evidence strings
+    all_applicable_ids: list   # IDs of all matched SOPs
+
+    # Final output
     final_answer: Optional[str]
 
 
@@ -95,6 +128,7 @@ class AgentState(TypedDict):
 # Helpers
 # ---------------------------------------------------------------------------
 def _format_history(messages: list) -> str:
+    """Render the last 3 exchanges as a concise string for the LLM context."""
     if not messages:
         return "No prior conversation."
     parts = []
@@ -102,11 +136,14 @@ def _format_history(messages: list) -> str:
         if isinstance(m, HumanMessage):
             parts.append(f"User: {m.content}")
         elif isinstance(m, AIMessage):
-            parts.append(f"Assistant: {m.content}")
+            # Include only the first line of bot reply to avoid token bloat
+            first_line = m.content.split("\n")[0][:200]
+            parts.append(f"Bot: {first_line}")
     return "\n".join(parts)
 
 
 def _parse_json(content: str) -> dict:
+    """Strip markdown code fences then parse JSON."""
     content = content.strip()
     if content.startswith("```"):
         lines = content.split("\n")
@@ -116,6 +153,7 @@ def _parse_json(content: str) -> dict:
 
 
 def _sop_match_to_dict(match: SOPMatch) -> dict:
+    """Serialize a SOPMatch to a JSON-safe dict including evidence."""
     return {
         "id": match.sop.id,
         "category": match.sop.category,
@@ -123,15 +161,63 @@ def _sop_match_to_dict(match: SOPMatch) -> dict:
         "severity": match.sop.severity,
         "trigger_description": match.sop.trigger_description,
         "advice": match.sop.advice,
-        "reasons": match.reasons,
+        "reasons": match.reasons,  # e.g. ["wind_speed_10m = 55 >= 40"]
+    }
+
+
+def _merge_intent(state: AgentState, new_intent: dict) -> dict:
+    """
+    Safely merge new intent fields into existing state.
+
+    Rules:
+    - If the new message explicitly provides a field, use the new value.
+    - If the new message does not provide a field, retain the previous valid value.
+    - Never hallucinate missing fields.
+    """
+    location = new_intent.get("location")
+    activity = new_intent.get("activity")
+    vulnerable_group = new_intent.get("vulnerable_group")
+    time_ref = new_intent.get("time_reference")
+    is_followup = new_intent.get("is_followup", False)
+
+    # Inherit location from prior state if this is a follow-up without new location
+    if not location and state.get("location") and is_followup:
+        location = state["location"]
+
+    # Inherit activity from prior state if not provided in new message
+    if not activity and state.get("activity") and is_followup:
+        activity = state["activity"]
+
+    # Inherit vulnerable group from prior state if not provided
+    if not vulnerable_group and state.get("vulnerable_group") and is_followup:
+        vulnerable_group = state["vulnerable_group"]
+
+    return {
+        "location": location or state.get("location"),
+        "activity": activity or state.get("activity"),
+        "vulnerable_group": vulnerable_group or state.get("vulnerable_group"),
+        "time_reference": time_ref,
+        "is_followup": is_followup,
+        "missing_location": not bool(location or state.get("location")),
     }
 
 
 # ---------------------------------------------------------------------------
-# Node 1: understand_question (LLM — intent extraction only)
+# Node 1: understand_question  (LLM — intent extraction only)
 # ---------------------------------------------------------------------------
 def node_understand_question(state: AgentState) -> AgentState:
-    """LLM extracts location, activity, and vulnerable group from the message."""
+    """
+    LLM extracts structured intent from the user's message.
+
+    What the LLM does here:
+      - Parse location, activity, vulnerable group, time reference, follow-up flag
+      - Resolve conversational references using the provided history
+
+    What the LLM does NOT do here:
+      - Evaluate weather conditions
+      - Select or suggest SOPs
+      - Make any policy decision
+    """
     history_str = _format_history(state.get("messages", []))
     prompt = EXTRACT_INTENT_PROMPT.format(
         history=history_str,
@@ -142,39 +228,45 @@ def node_understand_question(state: AgentState) -> AgentState:
     )
     try:
         data = _parse_json(response.content)
-    except Exception:
+    except (json.JSONDecodeError, ValueError):
+        # Graceful fallback — treat current question as raw activity, no location
         data = {
             "location": None,
             "activity": state["current_question"],
             "vulnerable_group": None,
+            "time_reference": None,
             "is_followup": False,
         }
 
-    location = data.get("location")
-    # For follow-ups, inherit location from prior state
-    if not location and state.get("location") and data.get("is_followup"):
-        location = state["location"]
+    merged = _merge_intent(state, data)
 
     return {
         **state,
-        "location": location or state.get("location"),
-        "activity": data.get("activity", state["current_question"]),
-        "vulnerable_group": data.get("vulnerable_group"),
-        "is_followup": data.get("is_followup", False),
+        "location": merged["location"],
+        "activity": merged["activity"],
+        "vulnerable_group": merged["vulnerable_group"],
+        "time_reference": merged.get("time_reference"),
+        "is_followup": merged["is_followup"],
     }
 
 
 # ---------------------------------------------------------------------------
-# Node 2: fetch_weather (deterministic HTTP call — no LLM)
+# Node 2: fetch_weather  (deterministic HTTP — no LLM)
 # ---------------------------------------------------------------------------
 def node_fetch_weather(state: AgentState) -> AgentState:
-    """Fetch live weather from Open-Meteo. No LLM involved."""
+    """
+    Fetch live weather from Open-Meteo using geocoding + forecast endpoints.
+    No LLM involved. Stores latitude/longitude for traceability.
+    """
     location = state.get("location")
     if not location:
         return {
             **state,
             "weather": None,
-            "weather_error": "No location was identified. Please specify a city name.",
+            "weather_error": (
+                "No location was identified in your question. "
+                "Please specify a city name so I can fetch the weather."
+            ),
         }
     try:
         weather = get_weather_for_city(location)
@@ -193,30 +285,56 @@ def node_fetch_weather(state: AgentState) -> AgentState:
             "apparent_temperature": weather.apparent_temperature,
             "wind_gusts_10m": weather.wind_gusts_10m,
         }
-        return {**state, "weather": weather_dict, "weather_error": None}
-    except ValueError as e:
-        return {**state, "weather": None, "weather_error": str(e)}
-    except Exception as e:
-        return {**state, "weather": None, "weather_error": f"Weather service unavailable: {str(e)}"}
+        return {
+            **state,
+            "weather": weather_dict,
+            "weather_error": None,
+            # Store coordinates for auditability
+            "latitude": weather.latitude,
+            "longitude": weather.longitude,
+        }
+    except ValueError as exc:
+        return {**state, "weather": None, "weather_error": str(exc)}
+    except Exception as exc:
+        return {
+            **state,
+            "weather": None,
+            "weather_error": f"Weather service unavailable: {str(exc)}",
+        }
 
 
 # ---------------------------------------------------------------------------
-# Node 3: evaluate_sops (FULLY DETERMINISTIC — zero LLM involvement)
+# Routing functions (explicit LangGraph conditional edges)
+# ---------------------------------------------------------------------------
+def route_after_weather(state: AgentState) -> str:
+    """weather_error present → failure_response, else → evaluate_sops."""
+    return "failure_response" if state.get("weather_error") else "evaluate_sops"
+
+
+def route_after_sop_eval(state: AgentState) -> str:
+    """primary_sop is None → no_sop_response, else → compose_response."""
+    return "no_sop_response" if state.get("primary_sop") is None else "compose_response"
+
+
+# ---------------------------------------------------------------------------
+# Node 3: evaluate_sops  (FULLY DETERMINISTIC — zero LLM involvement)
 # ---------------------------------------------------------------------------
 def node_evaluate_sops(state: AgentState) -> AgentState:
     """
-    Deterministic SOP evaluation.
+    Run the deterministic SOP engine.
 
-    Uses src/sop_engine.py — pure Python, no LLM.
-    1. Checks activity relevance for each SOP
-    2. Evaluates weather conditions using Python comparison operators
-    3. Selects primary SOP by deterministic priority rules
+    Steps:
+    1. Check activity relevance for each SOP (activity alias matching — pure Python)
+    2. Evaluate all weather conditions using Python comparison operators
+    3. Collect ALL matching SOPs with their evidence strings
+    4. Select primary SOP using deterministic priority rules (no LLM)
+
+    The LLM cannot influence this node.
     """
     weather = state["weather"]
-    activity = state.get("activity", "")
+    activity = state.get("activity") or ""
     vulnerable_group = state.get("vulnerable_group")
 
-    # Run deterministic engine
     matches = evaluate_sops(
         activity=activity,
         weather=weather,
@@ -236,34 +354,33 @@ def node_evaluate_sops(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
-# Routing functions (explicit conditional edges)
-# ---------------------------------------------------------------------------
-def route_after_weather(state: AgentState) -> str:
-    """Branch: weather_error -> failure_response, else -> evaluate_sops"""
-    return "failure_response" if state.get("weather_error") else "evaluate_sops"
-
-
-def route_after_sop_eval(state: AgentState) -> str:
-    """Branch: no SOP found -> no_sop_response, else -> compose_response"""
-    return "no_sop_response" if state.get("primary_sop") is None else "compose_response"
-
-
-# ---------------------------------------------------------------------------
-# Node 4a: compose_response (LLM — response formatting only)
+# Node 4a: compose_response  (LLM — response formatter only)
 # ---------------------------------------------------------------------------
 def node_compose_response(state: AgentState) -> AgentState:
     """
-    LLM formats the final response.
-    It receives deterministic results and ONLY writes natural language.
-    It cannot change which SOP was selected.
+    LLM writes the final natural-language response.
+
+    It receives:
+      - The user's question
+      - Actual Open-Meteo weather values
+      - The deterministic engine's primary SOP + trigger evidence
+      - All applicable SOP IDs
+
+    It cannot change which SOP was selected or what evidence was found.
     """
     weather = state["weather"]
     sop = state["primary_sop"]
 
+    # Build a structured evidence block so the LLM can mention it verbatim
+    evidence_lines = []
+    for reason in state.get("trigger_reasons", []):
+        evidence_lines.append(f"  • {reason}")
+    evidence_block = "\n".join(evidence_lines) if evidence_lines else "  (see SOP trigger description)"
+
     prompt = COMPOSE_ANSWER_PROMPT.format(
         question=state["current_question"],
         location=weather.get("location_name", state.get("location", "unknown")),
-        activity=state.get("activity", ""),
+        activity=state.get("activity") or "unspecified",
         temperature_2m=weather.get("temperature_2m"),
         apparent_temperature=weather.get("apparent_temperature"),
         wind_speed_10m=weather.get("wind_speed_10m"),
@@ -276,7 +393,7 @@ def node_compose_response(state: AgentState) -> AgentState:
         sop_id=sop["id"],
         sop_title=sop["title"],
         sop_severity=sop["severity"],
-        trigger_reasons=", ".join(state.get("trigger_reasons", [])),
+        trigger_reasons=evidence_block,
         all_applicable=", ".join(state.get("all_applicable_ids", [])),
         sop_advice=sop["advice"],
     )
@@ -288,19 +405,20 @@ def node_compose_response(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
-# Node 4b: no_sop_response (LLM — formats "no policy" message)
+# Node 4b: no_sop_response  (LLM — "no policy" formatter)
 # ---------------------------------------------------------------------------
 def node_no_sop_response(state: AgentState) -> AgentState:
     """
-    No SOP matched. LLM formats a polite 'no policy found' message.
-    It shares weather facts but must not invent safety advice.
+    No SOP matched. LLM formats a polite message that:
+      - States no policy applies
+      - Shares the actual weather facts
+      - Does NOT invent advice or imply the activity is safe
     """
     weather = state["weather"]
-
     prompt = NO_SOP_COMPOSE_PROMPT.format(
         question=state["current_question"],
         location=weather.get("location_name", state.get("location", "unknown")),
-        activity=state.get("activity", ""),
+        activity=state.get("activity") or "unspecified",
         temperature_2m=weather.get("temperature_2m"),
         apparent_temperature=weather.get("apparent_temperature"),
         wind_speed_10m=weather.get("wind_speed_10m"),
@@ -311,7 +429,6 @@ def node_no_sop_response(state: AgentState) -> AgentState:
         relative_humidity_2m=weather.get("relative_humidity_2m"),
         time=weather.get("time"),
     )
-
     response = llm.invoke(
         [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
     )
@@ -319,11 +436,14 @@ def node_no_sop_response(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
-# Node 5: failure_response (LLM — formats weather/location error message)
+# Node 5: failure_response  (LLM — error formatter)
 # ---------------------------------------------------------------------------
 def node_failure_response(state: AgentState) -> AgentState:
-    """Weather or location lookup failed. No advisory is given."""
-    reason = state.get("weather_error", "Unknown error")
+    """
+    Weather or location lookup failed.
+    LLM formats an honest error message. No advisory is given.
+    """
+    reason = state.get("weather_error") or "Unknown error"
     prompt = WEATHER_FAILURE_RESPONSE.format(reason=reason)
     response = llm.invoke(
         [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
@@ -379,18 +499,42 @@ graph_app = build_graph()
 # Public API
 # ---------------------------------------------------------------------------
 def run_conversation(
-    history: list, new_message: str
+    history: list,
+    new_message: str,
+    prior_context: Optional[dict] = None,
 ) -> tuple:
     """
-    Run one conversation turn.
-    Returns (answer, sop_id, weather_data_dict)
+    Run one conversation turn through the graph.
+
+    Parameters
+    ----------
+    history       : LangChain message objects from prior turns (HumanMessage/AIMessage)
+    new_message   : the user's latest message string
+    prior_context : optional dict with keys 'location', 'activity', 'vulnerable_group'
+                    preserved from the previous turn's state for follow-up resolution
+
+    Returns
+    -------
+    (answer, sop_id, weather_dict, full_state)
+      answer      – final response text
+      sop_id      – matched SOP ID or "NONE"
+      weather_dict – dict of weather fields used, or None on failure
+      full_state  – the complete final AgentState dict (for UI evidence panel)
     """
+    # Seed prior context so follow-up merging works correctly
+    ctx = prior_context or {}
+
     initial_state: AgentState = {
         "messages": history,
         "current_question": new_message,
-        "location": None,
-        "activity": None,
-        "vulnerable_group": None,
+        # Seed from prior context — the intent merger uses these as fallbacks
+        "location": ctx.get("location"),
+        "latitude": ctx.get("latitude"),
+        "longitude": ctx.get("longitude"),
+        "activity": ctx.get("activity"),
+        "category": ctx.get("category"),
+        "vulnerable_group": ctx.get("vulnerable_group"),
+        "time_reference": None,
         "is_followup": False,
         "weather": None,
         "weather_error": None,
@@ -403,9 +547,9 @@ def run_conversation(
 
     result = graph_app.invoke(initial_state)
 
-    answer = result.get("final_answer", "I encountered an error processing your request.")
+    answer = result.get("final_answer") or "I encountered an error processing your request."
     primary_sop = result.get("primary_sop")
     sop_id = primary_sop["id"] if primary_sop else "NONE"
     weather = result.get("weather")
 
-    return answer, sop_id, weather
+    return answer, sop_id, weather, result

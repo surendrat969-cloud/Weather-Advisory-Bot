@@ -36,24 +36,33 @@ You maintain memory of this conversation session. Use prior context for follow-u
 
 EXTRACT_INTENT_PROMPT = """Extract structured information from this user message.
 
-Conversation history:
+Conversation history (most recent first):
 {history}
 
 Current message: {message}
 
-Extract:
-1. LOCATION — city name (or null if not mentioned; use prior context if follow-up)
-2. ACTIVITY — what the user wants to do (e.g., cycling, picnic, driving, dog walk)
-3. VULNERABLE_GROUP — elderly, children, pets, or null
-4. IS_FOLLOWUP — true if this references a prior question in the conversation
+Extract the following fields. For follow-up messages, inherit fields not mentioned from the history.
 
-Respond ONLY in valid JSON, no markdown:
+1. LOCATION       — city name, or null if not mentioned anywhere in the conversation
+2. ACTIVITY       — what the user wants to do (e.g., cycling, picnic, driving, jogging)
+3. VULNERABLE_GROUP — elderly / children / pets, or null
+4. TIME_REFERENCE — "today", "tomorrow", "this evening", "now", or null
+5. IS_FOLLOWUP    — true if this message refers to a prior question in the conversation
+
+Rules:
+- If the user changes the location explicitly, use the new location.
+- If the user changes the activity explicitly, use the new activity.
+- If neither is changed and IS_FOLLOWUP is true, inherit them from history.
+- Do NOT invent a location if the user has never mentioned one.
+- If no location is available at all, set location to null.
+
+Respond ONLY in valid JSON with no markdown or explanation:
 {{
   "location": "<city name or null>",
-  "activity": "<activity>",
+  "activity": "<activity or null>",
   "vulnerable_group": "<group or null>",
-  "is_followup": <true/false>,
-  "notes": "<optional context>"
+  "time_reference": "<today/tomorrow/this evening/null>",
+  "is_followup": <true/false>
 }}"""
 
 COMPOSE_ANSWER_PROMPT = """You are a response formatter for a weather advisory system.
