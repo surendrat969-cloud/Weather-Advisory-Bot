@@ -3,7 +3,16 @@ sops:
     category: "outdoor_exercise"
     title: "High Wind Cycling Risk"
     severity: "high"
-    trigger_description: "Wind speed exceeds 40 km/h and user asks about cycling or two-wheelers. Flags as a safety risk, not just comfort."
+    trigger_description: "Wind speed exceeds 40 km/h and user asks about cycling or two-wheelers."
+    activities:
+      - cycling
+      - biking
+      - bicycle
+      - bike ride
+      - bike
+      - two-wheeler
+      - scooter
+      - motorcycle
     conditions:
       - field: "wind_speed_10m"
         op: "gte"
@@ -15,43 +24,88 @@ sops:
     category: "outdoor_exercise"
     title: "Heavy Precipitation — Avoid Outdoor Exercise"
     severity: "critical"
-    trigger_description: "Precipitation >= 10mm in the current hour OR precipitation_probability >= 80%. Advise against all outdoor exercise."
+    trigger_description: "Precipitation probability >= 80%. Advise against all outdoor exercise."
+    activities:
+      - running
+      - jogging
+      - cycling
+      - walking
+      - exercise
+      - workout
+      - outdoor exercise
+      - hiking
+      - trekking
+      - sports
+      - gym outdoors
     conditions:
       - field: "precipitation_probability"
         op: "gte"
         value: 80
-    advice: "Current precipitation levels or probability of rain are very high. Outdoor exercise is strongly discouraged — wet surfaces dramatically increase injury risk (slips, falls, poor visibility). Move your workout indoors. If you must go outside, wear appropriate rain gear and shorten your exposure time."
+    advice: "Current precipitation probability is very high. Outdoor exercise is strongly discouraged — wet surfaces dramatically increase injury risk (slips, falls, poor visibility). Move your workout indoors. If you must go outside, wear appropriate rain gear and shorten your exposure time."
     fuzzy: false
 
   - id: "OE-003"
     category: "outdoor_exercise"
     title: "High UV Index — Unprotected Exercise Risk"
     severity: "moderate"
-    trigger_description: "UV index >= 8 during peak hours (10am–4pm). Advise against unprotected outdoor exercise; recommend early morning or evening."
+    trigger_description: "UV index >= 8. Advise against unprotected outdoor exercise; recommend early morning or evening."
+    activities:
+      - running
+      - jogging
+      - cycling
+      - walking
+      - exercise
+      - workout
+      - outdoor exercise
+      - hiking
+      - sports
+      - playing
     conditions:
       - field: "uv_index"
         op: "gte"
         value: 8
-    advice: "The UV index is high. Exercising outdoors without sun protection during these hours risks sunburn, heat exhaustion, and long-term UV damage. Strongly recommend shifting outdoor exercise to early morning (before 9am) or after 5pm. If you must exercise now, wear SPF 50+ sunscreen, UV-blocking clothing, and a wide-brim hat."
+    advice: "The UV index is high. Exercising outdoors without sun protection risks sunburn, heat exhaustion, and long-term UV damage. Strongly recommend shifting outdoor exercise to early morning (before 9am) or after 5pm. If you must exercise now, wear SPF 50+ sunscreen, UV-blocking clothing, and a wide-brim hat."
     fuzzy: false
 
   - id: "OE-004"
     category: "outdoor_exercise"
     title: "Extreme Heat — Hydration and Rest Advisory"
     severity: "low"
-    trigger_description: "Temperature >= 38°C (100.4°F). Advise hydration, rest breaks, and avoiding peak afternoon hours."
+    trigger_description: "Temperature >= 38°C. Advise hydration, rest breaks, and avoiding peak afternoon hours."
+    activities:
+      - running
+      - jogging
+      - cycling
+      - walking
+      - exercise
+      - workout
+      - outdoor exercise
+      - hiking
+      - sports
+      - playing
     conditions:
       - field: "temperature_2m"
         op: "gte"
         value: 38
-    advice: "Temperatures are extremely high. If you exercise outdoors, drink at least 500ml of water before starting and 250ml every 20 minutes. Take rest breaks in shade every 15–20 minutes. Avoid the peak heat window of 11am–4pm. Watch for signs of heat exhaustion: dizziness, nausea, excessive sweating, or confusion — if any appear, stop immediately and seek a cool environment."
+    advice: "Temperatures are extremely high. If you exercise outdoors, drink at least 500ml of water before starting and 250ml every 20 minutes. Take rest breaks in shade every 15-20 minutes. Avoid the peak heat window of 11am-4pm. Watch for signs of heat exhaustion: dizziness, nausea, excessive sweating, or confusion — if any appear, stop immediately and seek a cool environment."
     fuzzy: false
 
   - id: "TR-001"
     category: "travel"
     title: "Rain-Related Travel Delays"
     severity: "moderate"
-    trigger_description: "Precipitation probability >= 70%. Warn of possible travel delays; recommend checking alerts before departure."
+    trigger_description: "Precipitation probability >= 70%. Warn of possible travel delays."
+    activities:
+      - travel
+      - driving
+      - commute
+      - road trip
+      - trip
+      - journey
+      - bus
+      - train
+      - going out
+      - outing
     conditions:
       - field: "precipitation_probability"
         op: "gte"
@@ -63,19 +117,36 @@ sops:
     category: "travel"
     title: "High Wind Risk for High-Profile Vehicles"
     severity: "high"
-    trigger_description: "Wind speed >= 50 km/h. High-profile vehicles (buses, trucks, vans) face serious risk. Recommend postponing non-essential travel."
+    trigger_description: "Wind speed >= 50 km/h. High-profile vehicles face serious risk."
+    activities:
+      - travel
+      - driving
+      - commute
+      - road trip
+      - trip
+      - bus
+      - truck
+      - van
     conditions:
       - field: "wind_speed_10m"
         op: "gte"
         value: 50
-    advice: "Wind speeds are dangerously high for high-profile vehicles such as buses, trucks, vans, and SUVs. Strong crosswinds at these speeds can cause loss of vehicle control, especially on elevated roads, bridges, and open highways. Postpone all non-essential travel. If you must travel, use low-profile vehicles, drive at reduced speeds, and grip the steering wheel firmly when overtaking large vehicles or crossing exposed sections."
+    advice: "Wind speeds are dangerously high for high-profile vehicles such as buses, trucks, vans, and SUVs. Strong crosswinds at these speeds can cause loss of vehicle control, especially on elevated roads, bridges, and open highways. Postpone all non-essential travel. If you must travel, drive at reduced speeds and grip the steering wheel firmly when crossing exposed sections."
     fuzzy: false
 
   - id: "TR-003"
     category: "travel"
     title: "Severe Precipitation — Avoid All Non-Essential Travel"
     severity: "critical"
-    trigger_description: "Precipitation >= 15mm/hr or precipitation_probability >= 90%. Advise against all non-essential travel; roads may be dangerous."
+    trigger_description: "Precipitation probability >= 90%. Advise against all non-essential travel."
+    activities:
+      - travel
+      - driving
+      - commute
+      - road trip
+      - trip
+      - journey
+      - going out
     conditions:
       - field: "precipitation_probability"
         op: "gte"
@@ -87,31 +158,54 @@ sops:
     category: "vulnerable_groups"
     title: "Heat Risk for Elderly, Children, and Pets"
     severity: "high"
-    trigger_description: "Temperature >= 35°C and user mentions elderly, children, or pets. Treat as high-severity heat risk; advise indoor activities."
+    trigger_description: "Temperature >= 35°C and user mentions elderly, children, or pets."
+    activities:
+      - walking
+      - playing
+      - outing
+      - park
+      - outdoor
+      - going outside
+      - exercise
+      - dog walk
+      - pet walk
+      - elderly outing
+      - kids outside
+      - children outside
     conditions:
       - field: "temperature_2m"
         op: "gte"
         value: 35
-    advice: "Temperatures pose a serious health risk for vulnerable individuals (elderly, young children) and pets. Heat stroke and dehydration can develop rapidly in these groups. Keep vulnerable individuals indoors in air-conditioned or well-ventilated spaces. Do not leave children or pets in parked vehicles under any circumstances. Ensure frequent hydration. If outdoor exposure is unavoidable, limit it to under 15 minutes and ensure full shade access."
+    advice: "Temperatures pose a serious health risk for vulnerable individuals (elderly, young children) and pets. Heat stroke and dehydration can develop rapidly in these groups. Keep vulnerable individuals indoors in air-conditioned or well-ventilated spaces. Do not leave children or pets in parked vehicles. Ensure frequent hydration. If outdoor exposure is unavoidable, limit it to under 15 minutes and ensure full shade access."
     fuzzy: false
 
   - id: "VG-002"
     category: "vulnerable_groups"
     title: "UV Protection for Children"
     severity: "moderate"
-    trigger_description: "UV index >= 6 and user mentions children. Recommend sunscreen, hats, and limiting midday outdoor time."
+    trigger_description: "UV index >= 6 and user mentions children."
+    activities:
+      - playing
+      - park
+      - playground
+      - outdoor
+      - kids outside
+      - children outside
+      - school outdoor
+      - sports
     conditions:
       - field: "uv_index"
         op: "gte"
         value: 6
-    advice: "The UV index is elevated — children's skin is significantly more sensitive to UV radiation than adults'. Apply broad-spectrum SPF 50+ sunscreen at least 20 minutes before going outside, and reapply every 2 hours. Ensure children wear wide-brim hats and UV-protective clothing. Limit outdoor time between 10am and 4pm. Seek shade whenever possible. Sunglasses with UV protection are also recommended."
+    advice: "The UV index is elevated — children's skin is significantly more sensitive to UV radiation than adults'. Apply broad-spectrum SPF 50+ sunscreen at least 20 minutes before going outside, and reapply every 2 hours. Ensure children wear wide-brim hats and UV-protective clothing. Limit outdoor time between 10am and 4pm. Seek shade whenever possible."
     fuzzy: false
 
   - id: "GO-001"
     category: "general_outdoor"
     title: "Combined Storm Risk"
     severity: "high"
-    trigger_description: "Wind speed >= 40 km/h AND precipitation_probability >= 60%. Treat as combined storm risk regardless of activity type."
+    trigger_description: "Wind speed >= 40 km/h AND precipitation_probability >= 60%. Combined storm risk."
+    activities: []
     conditions:
       - field: "wind_speed_10m"
         op: "gte"
@@ -119,23 +213,44 @@ sops:
       - field: "precipitation_probability"
         op: "gte"
         value: 60
-    advice: "A combination of high winds and significant precipitation probability creates storm-level risk conditions. This applies regardless of the planned outdoor activity. Wind-driven rain severely reduces visibility, increases slip hazards, and can cause falling branches or debris. Avoid all prolonged outdoor exposure. If you must go outside, stay away from trees, construction sites, and elevated or exposed areas. Monitor weather updates every 30 minutes."
+    advice: "A combination of high winds and significant precipitation probability creates storm-level risk conditions. This applies regardless of the planned outdoor activity. Wind-driven rain severely reduces visibility, increases slip hazards, and can cause falling branches or debris. Avoid all prolonged outdoor exposure. Monitor weather updates every 30 minutes."
     fuzzy: false
 
   - id: "GO-002"
     category: "general_outdoor"
     title: "Picnic and Leisure Comfort Assessment"
     severity: "low"
-    trigger_description: "Picnic or leisure outdoor activity assessment. No single numeric threshold — holistic evaluation of temperature (ideal 18–28°C), wind (< 20 km/h), precipitation probability (< 30%), and UV index (< 7)."
-    conditions: []
-    advice: "Conditions have been assessed holistically for outdoor leisure comfort. Ideal picnic conditions are: temperature 18–28°C, wind below 20 km/h, precipitation probability below 30%, and UV index below 7. Provide specific guidance based on where conditions fall relative to these benchmarks."
-    fuzzy: true
+    trigger_description: "Picnic or leisure outing. Evaluates composite conditions for comfort."
+    activities:
+      - picnic
+      - outing
+      - outdoor gathering
+      - leisure
+      - garden party
+      - barbecue
+      - bbq
+      - outdoor lunch
+      - outdoor dinner
+    conditions:
+      any:
+        - field: "precipitation_probability"
+          op: "gte"
+          value: 50
+        - field: "precipitation"
+          op: "gt"
+          value: 1
+        - field: "wind_speed_10m"
+          op: "gt"
+          value: 30
+    advice: "Picnic/leisure conditions have been assessed. Ideal conditions: temperature 18-28°C, wind below 20 km/h, precipitation probability below 30%, UV index below 7. Any condition outside these ranges reduces comfort or poses a risk."
+    fuzzy: false
 
   - id: "GO-003"
     category: "general_outdoor"
     title: "Active Storm — Cease All Outdoor Activities"
     severity: "critical"
-    trigger_description: "Precipitation >= 5mm current AND wind >= 35 km/h simultaneously. Flags active storm conditions; all outdoor activities should cease."
+    trigger_description: "Precipitation >= 5mm current AND wind >= 35 km/h simultaneously."
+    activities: []
     conditions:
       - field: "precipitation"
         op: "gte"
@@ -143,5 +258,5 @@ sops:
       - field: "wind_speed_10m"
         op: "gte"
         value: 35
-    advice: "Active storm conditions detected — significant precipitation and high winds are occurring simultaneously. All outdoor activities must cease immediately. Seek sturdy indoor shelter away from windows. Do not attempt to travel unless in an emergency. This is an active weather emergency. Follow local emergency broadcasts and official weather alerts. Do not resume outdoor activities until both precipitation and wind have subsided significantly."
+    advice: "Active storm conditions detected — significant precipitation and high winds are occurring simultaneously. All outdoor activities must cease immediately. Seek sturdy indoor shelter away from windows. Do not attempt to travel unless in an emergency. Follow local emergency broadcasts and official weather alerts."
     fuzzy: false
