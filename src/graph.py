@@ -13,14 +13,30 @@ from langgraph.graph import StateGraph, END
 
 load_dotenv()
 
-# On Streamlit Cloud, secrets are in st.secrets; locally they're in .env
-import os
-try:
-    import streamlit as st
-    if "GROQ_API_KEY" in st.secrets:
-        os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
-except Exception:
-    pass  # Not running in Streamlit context (e.g., eval suite)
+# ---------------------------------------------------------------------------
+# Resolve API key — works locally (.env) AND on Streamlit Cloud (st.secrets)
+# Must happen before ChatGroq is instantiated.
+# ---------------------------------------------------------------------------
+def _resolve_groq_key() -> str:
+    # 1. Local: loaded from .env by load_dotenv() above
+    key = os.environ.get("GROQ_API_KEY", "").strip()
+    if key:
+        return key
+    # 2. Streamlit Cloud: secrets injected via st.secrets
+    try:
+        import streamlit as st
+        key = st.secrets.get("GROQ_API_KEY", "").strip()
+        if key:
+            os.environ["GROQ_API_KEY"] = key  # make it available to groq client
+            return key
+    except Exception:
+        pass
+    raise RuntimeError(
+        "GROQ_API_KEY not found. "
+        "Add it to .env (local) or Streamlit Cloud secrets (deployment)."
+    )
+
+GROQ_API_KEY = _resolve_groq_key()
 
 from src.sops_loader import load_sops, check_numeric_conditions, SOP
 from src.weather import get_weather_for_city
@@ -34,9 +50,9 @@ from src.prompts import (
 )
 
 # ---------------------------------------------------------------------------
-# LLM client (loaded once)
+# LLM client (loaded once, key passed explicitly)
 # ---------------------------------------------------------------------------
-llm = ChatGroq(model="qwen/qwen3.8-27b", temperature=0)
+llm = ChatGroq(model="qwen/qwen3.8-27b", temperature=0, api_key=GROQ_API_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -97,9 +113,7 @@ def _parse_json_response(content: str) -> dict:
     """Strip markdown code fences and parse JSON."""
     content = content.strip()
     if content.startswith("```"):
-        # Remove opening fence (```json or ```)
         lines = content.split("\n")
-        # Drop first line (```json) and last line (```)
         inner = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
         content = inner.strip()
     return json.loads(content)
@@ -129,7 +143,6 @@ def node_extract_intent(state: AgentState) -> AgentState:
             "notes": "",
         }
 
-    # If this is a follow-up and no new location was detected, keep the existing one
     location = data.get("location")
     if not location and state.get("location") and data.get("is_followup"):
         location = state["location"]
@@ -206,7 +219,6 @@ def node_match_sop(state: AgentState) -> AgentState:
     """
     weather_dict = state["weather"]
 
-    # Build a simple proxy object so check_numeric_conditions can use getattr()
     class WeatherProxy:
         pass
 
@@ -214,13 +226,11 @@ def node_match_sop(state: AgentState) -> AgentState:
     for k, v in weather_dict.items():
         setattr(w, k, v)
 
-    # Phase 1: deterministic numeric matching
     numeric_matches = []
     for sop in ALL_SOPS:
         if not sop.fuzzy and check_numeric_conditions(sop, w):
             numeric_matches.append(sop.id)
 
-    # Phase 2: LLM picks the best (or only) match, handles fuzzy SOPs
     sop_list_str = json.dumps([sop_to_dict(s) for s in ALL_SOPS], indent=2)
 
     prompt = MATCH_SOP_PROMPT.format(
@@ -363,7 +373,6 @@ def build_graph():
     return builder.compile()
 
 
-# Compile once at module level for import by app.py and eval suite
 graph_app = build_graph()
 
 
@@ -375,30 +384,12 @@ def run_conversation(
 ) -> tuple[str, Optional[str], Optional[dict]]:
     """
     Run one conversation turn through the graph.
-
-    Parameters
-    ----------
-    history   : list of HumanMessage / AIMessage objects from prior turns
-    new_message : the user's latest message string
-
-    Returns
-    -------
-    (answer, sop_id, weather_data_dict)
-      answer          – the bot's response text
-      sop_id          – the matched SOP id, or "NONE"
-      weather_data_dict – dict of weather fields used, or None on failure
+    Returns (answer, sop_id, weather_data_dict)
     """
-    # Attempt to carry forward the last known location from history
-    last_location = None
-    if history:
-        # Walk backwards through AIMessages to look for a location reference
-        # (The intent extractor handles this properly, but we seed it here too)
-        pass
-
     initial_state: AgentState = {
         "messages": history,
         "current_question": new_message,
-        "location": last_location,
+        "location": None,
         "activity": None,
         "vulnerable_group": None,
         "is_followup": False,
