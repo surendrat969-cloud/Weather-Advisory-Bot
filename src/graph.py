@@ -71,7 +71,7 @@ from src.prompts import (
 # ---------------------------------------------------------------------------
 # LLM — used ONLY for intent extraction and response composition
 # ---------------------------------------------------------------------------
-llm = ChatGroq(model="qwen/qwen3.8-27b", temperature=0, api_key=GROQ_API_KEY)
+llm = ChatGroq(model="qwen/qwen3.8-27b", temperature=0, api_key=GROQ_API_KEY, max_tokens=800)
 
 # Load SOPs once at startup — avoids re-reading YAML on every request
 ALL_SOPS = load_sops()
