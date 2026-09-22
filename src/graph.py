@@ -13,6 +13,15 @@ from langgraph.graph import StateGraph, END
 
 load_dotenv()
 
+# On Streamlit Cloud, secrets are in st.secrets; locally they're in .env
+import os
+try:
+    import streamlit as st
+    if "GROQ_API_KEY" in st.secrets:
+        os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
+except Exception:
+    pass  # Not running in Streamlit context (e.g., eval suite)
+
 from src.sops_loader import load_sops, check_numeric_conditions, SOP
 from src.weather import get_weather_for_city
 from src.prompts import (
